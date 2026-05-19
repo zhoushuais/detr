@@ -3,7 +3,7 @@ random_seed: 444
 
 dataset:
   type: &dataset_type 'KITTI'
-  root_dir: 'data/KITTIDataset'
+  root_dir: '../data/KITTIDataset'
   train_split: 'train'
   test_split: 'val'
   batch_size: 16
@@ -12,7 +12,7 @@ dataset:
   use_dontcare: False
   bbox2d_type: 'anno'  # 'proj' or 'anno'
   meanshape: False  # use predefined anchor or not
-  writelist: ['Car']
+  writelist: ['Car', 'Pedestrian', 'Cyclist']
   clip_2d: False
 
   aug_pd: True
@@ -39,6 +39,14 @@ model:
   dilation: False
   position_embedding: 'sine'  # 'sine' or 'learned'
   masks: False
+
+  # [P1-SCA-FPN] Improvement 1: Spatial-Channel Attention FPN.
+  # Inserts high-level semantic guidance for low-level spatial attention
+  # between input_proj and the depth_predictor / transformer encoder.
+  # Set to False to fall back to baseline MonoDETR (for ablation).
+  use_sca_fpn: True
+  sca_fpn_reduction: 16    # channel attention bottleneck ratio (CBAM style)
+  sca_fpn_kernel: 7        # spatial attention conv kernel size
 
   # Depth predictor
   mode: LID
