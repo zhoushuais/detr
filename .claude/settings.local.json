@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where pdftoppm *)",
+      "Bash(python -c \"import fitz; print\\('pymupdf ok', fitz.__doc__[:60]\\)\")",
+      "Bash(python -c \"import pypdf; print\\('pypdf ok', pypdf.__version__\\)\")"
+    ]
+  }
+}
