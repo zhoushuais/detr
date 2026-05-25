@@ -23,6 +23,7 @@ screen -d -r 19112  用这个
 
 # 1. 导出显卡变量（确保只用空闲卡）
 export CUDA_VISIBLE_DEVICES=6
+echo $CUDA_VISIBLE_DEVICES
 
 # 2. 运行并保存日志（同时在屏幕显示和存文件）
 # 2>&1 | tee 意思是：既把日志输出到屏幕让你看着爽，又存到文件里备份

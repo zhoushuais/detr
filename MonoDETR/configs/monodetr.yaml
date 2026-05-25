@@ -43,10 +43,19 @@ model:
   # [P1-SCA-FPN] Improvement 1: Spatial-Channel Attention FPN.
   # Inserts high-level semantic guidance for low-level spatial attention
   # between input_proj and the depth_predictor / transformer encoder.
-  # Set to False to fall back to baseline MonoDETR (for ablation).
+  # Set use_sca_fpn=False to fall back to baseline MonoDETR.
+  #
+  # Ablation rows (planned for thesis Tab.):
+  #   row1: use_sca_fpn=False                                                  -> Baseline
+  #   row2: use_sca_fpn=True,  high_guidance=False, dcn=False                  -> +CA/SA only
+  #   row3: use_sca_fpn=True,  high_guidance=True,  dcn=False                  -> +top-down guide
+  #   row4: use_sca_fpn=True,  high_guidance=True,  dcn=True                   -> Full (P1 final)
   use_sca_fpn: True
-  sca_fpn_reduction: 16    # channel attention bottleneck ratio (CBAM style)
-  sca_fpn_kernel: 7        # spatial attention conv kernel size
+  sca_fpn_reduction: 16          # channel attention bottleneck ratio (CBAM style)
+  sca_fpn_kernel: 7              # spatial attention conv kernel size
+  sca_fpn_high_guidance: True    # top-down high-level SA guidance for low levels
+  use_dcn_lateral: True          # 3x3 deformable conv in lateral path (zero-init offsets)
+  dcn_kernel: 3                  # DCN kernel size (3 is standard, must be >=3)
 
   # Depth predictor
   mode: LID

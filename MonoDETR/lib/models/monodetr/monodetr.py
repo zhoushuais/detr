@@ -32,7 +32,8 @@ class MonoDETR(nn.Module):
     """ This is the MonoDETR module that performs monocualr 3D object detection """
     def __init__(self, backbone, depthaware_transformer, depth_predictor, num_classes, num_queries, num_feature_levels,
                  aux_loss=True, with_box_refine=False, two_stage=False, init_box=False, use_dab=False, group_num=11, two_stage_dino=False,
-                 use_sca_fpn=False, sca_fpn_reduction=16, sca_fpn_kernel=7):
+                 use_sca_fpn=False, sca_fpn_reduction=16, sca_fpn_kernel=7,
+                 sca_fpn_high_guidance=True, use_dcn_lateral=False, dcn_kernel=3):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -120,7 +121,12 @@ class MonoDETR(nn.Module):
                 num_levels=num_feature_levels,
                 reduction=sca_fpn_reduction,
                 spatial_kernel=sca_fpn_kernel,
-                use_high_guidance=True,
+                use_high_guidance=sca_fpn_high_guidance,
+                # [P1-SCA-FPN-DCN] Optional deformable lateral conv; offsets
+                # are zero-initialised so this layer starts as a regular 3x3
+                # conv and only develops sampling adaptivity during training.
+                use_dcn_lateral=use_dcn_lateral,
+                dcn_kernel=dcn_kernel,
             )
         else:
             self.sca_fpn = None
@@ -602,6 +608,12 @@ def build(cfg):
         use_sca_fpn=cfg.get('use_sca_fpn', False),
         sca_fpn_reduction=cfg.get('sca_fpn_reduction', 16),
         sca_fpn_kernel=cfg.get('sca_fpn_kernel', 7),
+        # [P1-SCA-FPN] high-level top-down spatial guidance + DCN lateral.
+        # Exposed via config so ablations (full / no-guide / +DCN) can be
+        # toggled from yaml without touching code.
+        sca_fpn_high_guidance=cfg.get('sca_fpn_high_guidance', True),
+        use_dcn_lateral=cfg.get('use_dcn_lateral', False),
+        dcn_kernel=cfg.get('dcn_kernel', 3),
     )
 
     # matcher

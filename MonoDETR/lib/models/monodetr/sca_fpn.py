@@ -29,6 +29,53 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+# [P1-SCA-FPN-DCN] Optional deformable convolution for the lateral path.
+# Loaded lazily so environments without torchvision.ops.DeformConv2d still
+# import this file (only fails if you actually enable use_dcn_lateral).
+def _get_deform_conv2d():
+    from torchvision.ops import DeformConv2d
+    return DeformConv2d
+
+
+class DeformLateralConv(nn.Module):
+    """
+    Deformable 3x3 lateral conv used as a drop-in replacement for the
+    regular 1x1 Conv2d + GroupNorm in SCAFPN.
+
+    Why deformable: regular 3x3 conv samples on a fixed grid; for small /
+    occluded / truncated 3D targets the grid leaks background pixels.
+    A DCN learns per-location (Δx, Δy) offsets so sampling points snap onto
+    the actual object shape — particularly valuable for distant pedestrians
+    and cyclists in KITTI.
+
+    Stability trick: the offset prediction conv is ZERO-initialized, so at
+    iteration 0 every offset is 0 and the layer behaves like a regular 3x3
+    conv. This preserves baseline statistics; offsets are learned during
+    training. Together with the residual `out = lat + src` in SCAFPN this
+    means "use_dcn_lateral=True" cannot hurt training from step 1.
+    """
+
+    def __init__(self, in_channels, kernel_size=3):
+        super().__init__()
+        DeformConv2d = _get_deform_conv2d()
+        padding = kernel_size // 2
+        # Predicts 2 * K * K offsets (Δx, Δy for each sampling point).
+        self.offset_conv = nn.Conv2d(
+            in_channels, 2 * kernel_size * kernel_size,
+            kernel_size=kernel_size, padding=padding, bias=True)
+        # Zero-init so initial behaviour = regular 3x3 conv (no offsets).
+        nn.init.zeros_(self.offset_conv.weight)
+        nn.init.zeros_(self.offset_conv.bias)
+        self.deform = DeformConv2d(
+            in_channels, in_channels,
+            kernel_size=kernel_size, padding=padding, bias=False)
+        self.norm = nn.GroupNorm(32, in_channels)
+
+    def forward(self, x):
+        offset = self.offset_conv(x)
+        return self.norm(self.deform(x, offset))
+
+
 class ChannelAttention(nn.Module):
     """CBAM-style channel attention: global avg + max pool -> shared MLP -> sigmoid."""
 
@@ -80,10 +127,12 @@ class SCAFPN(nn.Module):
     """
 
     def __init__(self, num_channels=256, num_levels=4, reduction=16,
-                 spatial_kernel=7, use_high_guidance=True):
+                 spatial_kernel=7, use_high_guidance=True,
+                 use_dcn_lateral=False, dcn_kernel=3):
         super().__init__()
         self.num_levels = num_levels
         self.use_high_guidance = use_high_guidance
+        self.use_dcn_lateral = use_dcn_lateral
 
         # Per-level channel attention
         self.cas = nn.ModuleList([
@@ -99,14 +148,23 @@ class SCAFPN(nn.Module):
         if use_high_guidance:
             self.high_sa = SpatialAttention(kernel_size=spatial_kernel)
 
-        # Per-level lateral 1x1 conv to smooth the gated output
-        self.laterals = nn.ModuleList([
-            nn.Sequential(
-                nn.Conv2d(num_channels, num_channels, kernel_size=1, bias=False),
-                nn.GroupNorm(32, num_channels),
-            )
-            for _ in range(num_levels)
-        ])
+        # [P1-SCA-FPN-DCN] Per-level lateral conv: either a plain 1x1 conv +
+        # GN (the original SCA-FPN design) or a 3x3 deformable conv + GN
+        # (this is the P1 extension that gives sampling adaptivity for
+        # small / occluded targets). Toggled by use_dcn_lateral.
+        if use_dcn_lateral:
+            self.laterals = nn.ModuleList([
+                DeformLateralConv(num_channels, kernel_size=dcn_kernel)
+                for _ in range(num_levels)
+            ])
+        else:
+            self.laterals = nn.ModuleList([
+                nn.Sequential(
+                    nn.Conv2d(num_channels, num_channels, kernel_size=1, bias=False),
+                    nn.GroupNorm(32, num_channels),
+                )
+                for _ in range(num_levels)
+            ])
 
         self._reset_parameters()
 
@@ -119,6 +177,13 @@ class SCAFPN(nn.Module):
             elif isinstance(m, nn.GroupNorm):
                 nn.init.ones_(m.weight)
                 nn.init.zeros_(m.bias)
+
+        # [P1-SCA-FPN-DCN] Restore zero-init for DCN offset convs
+        # (the loop above would have Kaiming-initialised them).
+        if self.use_dcn_lateral:
+            for lat in self.laterals:
+                nn.init.zeros_(lat.offset_conv.weight)
+                nn.init.zeros_(lat.offset_conv.bias)
 
     def forward(self, srcs):
         """
