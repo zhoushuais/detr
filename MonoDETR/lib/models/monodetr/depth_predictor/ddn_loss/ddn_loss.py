@@ -98,10 +98,24 @@ class DDNLoss(nn.Module):
 
             # Convert to integer
             indices = indices.type(torch.int64)
-       
+
         return indices
 
-    def forward(self, depth_logits, gt_boxes2d, num_gt_per_img, gt_center_depth):
+    def bin_depths_dynamic(self, depth_map, bin_edges):
+        # [P2-DBDU] Convert a depth map to bin indices using per-image bin edges.
+        #   depth_map: (B, H, W); bin_edges: (B, num_bins+1) monotonic [dmin..dmax].
+        # Out-of-range pixels (background ~0 / >= depth_max) fall into the catch-all
+        # bin num_bins, matching the baseline LID bin_depths(target=True) behaviour.
+        B, H, W = depth_map.shape
+        num_bins = bin_edges.shape[1] - 1
+        flat = depth_map.reshape(B, -1)
+        idx = torch.searchsorted(bin_edges, flat, right=True) - 1
+        idx = idx.clamp(min=0, max=num_bins)
+        out_of_range = (flat < bin_edges[:, :1]) | (flat >= bin_edges[:, -1:])
+        idx[out_of_range] = num_bins
+        return idx.reshape(B, H, W).type(torch.int64)
+
+    def forward(self, depth_logits, gt_boxes2d, num_gt_per_img, gt_center_depth, bin_edges=None):
         """
         Gets depth_map loss
         Args:
@@ -116,7 +130,11 @@ class DDNLoss(nn.Module):
         # Bin depth map to create target
         depth_maps = self.build_target_depth_from_3dcenter(depth_logits, gt_boxes2d, gt_center_depth, num_gt_per_img)
         #ipdb.set_trace()
-        depth_target = self.bin_depths(depth_maps, target=True)
+        # [P2-DBDU] dynamic per-image bins vs fixed LID bins
+        if bin_edges is not None:
+            depth_target = self.bin_depths_dynamic(depth_maps, bin_edges)
+        else:
+            depth_target = self.bin_depths(depth_maps, target=True)
         #ipdb.set_trace()
         # Compute loss
         loss = self.loss_func(depth_logits, depth_target)

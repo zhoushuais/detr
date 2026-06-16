@@ -3,7 +3,7 @@ random_seed: 444
 
 dataset:
   type: &dataset_type 'KITTI'
-  root_dir: 'data/KITTIDataset'
+  root_dir: '../data/KITTIDataset'
   train_split: 'train'
   test_split: 'val'
   batch_size: 16
@@ -12,7 +12,7 @@ dataset:
   use_dontcare: False
   bbox2d_type: 'anno'  # 'proj' or 'anno'
   meanshape: False  # use predefined anchor or not
-  writelist: ['Car']
+  writelist: ['Car', 'Pedestrian', 'Cyclist']
   clip_2d: False
 
   aug_pd: True
@@ -45,6 +45,31 @@ model:
   num_depth_bins: 80
   depth_min: 1e-3
   depth_max: 60.0
+
+  # [P2-DBDU] Improvement 2: Dynamic Bins (first increment).
+  # Replaces the fixed image-shared LID partition with AdaBins-style per-image
+  # adaptive bin centers. Set use_dynamic_bins=False to fall back to baseline.
+  #   r1: use_dynamic_bins=False  -> Baseline (fixed LID)
+  #   r2: use_dynamic_bins=True   -> + Dynamic Bins
+  use_dynamic_bins: False
+  num_dynamic_bins: 80           # number of dynamic bins (default = num_depth_bins)
+  dynamic_bins_adapt_scale: 0.5  # bound on per-image bin perturbation around LID
+                                 # (tanh*scale); prevents the far-range collapse.
+                                 # 0.0 -> exact LID; larger -> more adaptation room.
+
+  # [P2-DBDU] Improvement 2b: geometric-depth uncertainty-weighted fusion.
+  # Replaces the plain /3 mean of (reg, geo, map) depths with inverse-variance
+  # fusion; geometric depth gets an analytic sigma_geo = D_geo * sigma_h / h.
+  #   r1: use_geo_depth_fusion=False -> Baseline (/3 mean, bit-identical)
+  #   r2: use_geo_depth_fusion=True  -> + geometric sigma-weighted fusion
+  use_geo_depth_fusion: False     # off -> baseline /3 mean (bit-identical)
+  geo_depth_init_pixel_sigma: 1.0 # init for sigma_h (box-height px uncertainty);
+                                  # learnable. Matters only once the gate opens.
+  geo_fusion_gate_init: 0.05      # clamp-linear residual gate: alpha=clamp(gate,0,1).
+                                  # 0.05 -> point est ~= baseline /3 at iter-0, but
+                                  # gradient is non-vanishing so it can actually open
+                                  # (sigmoid(-4) was gradient-frozen). loss-sigma is
+                                  # decoupled from the gate -> opening it can't blow up.
 
   # Transformer
   with_box_refine: True

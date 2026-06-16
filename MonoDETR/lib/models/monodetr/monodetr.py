@@ -28,7 +28,8 @@ def _get_clones(module, N):
 class MonoDETR(nn.Module):
     """ This is the MonoDETR module that performs monocualr 3D object detection """
     def __init__(self, backbone, depthaware_transformer, depth_predictor, num_classes, num_queries, num_feature_levels,
-                 aux_loss=True, with_box_refine=False, two_stage=False, init_box=False, use_dab=False, group_num=11, two_stage_dino=False):
+                 aux_loss=True, with_box_refine=False, two_stage=False, init_box=False, use_dab=False, group_num=11, two_stage_dino=False,
+                 use_geo_depth_fusion=False, geo_depth_init_pixel_sigma=1.0, geo_fusion_gate_init=0.05):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -61,6 +62,22 @@ class MonoDETR(nn.Module):
         self.angle_embed = MLP(hidden_dim, hidden_dim, 24, 2)
         self.depth_embed = MLP(hidden_dim, hidden_dim, 2, 2)  # depth and deviation
         self.use_dab = use_dab
+
+        # [P2-DBDU] geometric-depth uncertainty-weighted fusion (3 scalar params,
+        # global; off -> baseline /3 mean). sigma_h = box-height px uncertainty for
+        # the analytic geometric variance; depthmap_log_var = depth-map source
+        # log-variance; geo_fusion_gate = CLAMP-LINEAR residual gate, alpha =
+        # clamp(gate, 0, 1), init ~0.05 -> point estimate ~= baseline /3 at iter-0
+        # but the gate has NON-VANISHING gradient so it can actually open (the
+        # earlier sigmoid(-4) init was gradient-saturated and stayed frozen). The
+        # loss-sigma is DECOUPLED from this gate (forward feeds the baseline learned
+        # log-var), so opening the gate only refines the point estimate and never
+        # re-amplifies the depth loss. Kept global (not per-layer cloned) on purpose.
+        self.use_geo_depth_fusion = use_geo_depth_fusion
+        if use_geo_depth_fusion:
+            self.geo_log_sigma_h = nn.Parameter(torch.tensor(math.log(geo_depth_init_pixel_sigma)))
+            self.depthmap_log_var = nn.Parameter(torch.tensor(0.0))
+            self.geo_fusion_gate = nn.Parameter(torch.tensor(float(geo_fusion_gate_init)))
 
         if init_box == True:
             nn.init.constant_(self.bbox_embed.layers[-1].weight.data, 0)
@@ -198,7 +215,7 @@ class MonoDETR(nn.Module):
                 # only use one group in inference
                 query_embeds = self.query_embed.weight[:self.num_queries]
 
-        pred_depth_map_logits, depth_pos_embed, weighted_depth, depth_pos_embed_ip = self.depth_predictor(srcs, masks[1], pos[1])
+        pred_depth_map_logits, depth_pos_embed, weighted_depth, depth_pos_embed_ip, pred_depth_bins = self.depth_predictor(srcs, masks[1], pos[1])
         
         hs, init_reference, inter_references, inter_references_dim, enc_outputs_class, enc_outputs_coord_unact = self.depthaware_transformer(
             srcs, masks, pos, query_embeds, depth_pos_embed, depth_pos_embed_ip)#, attn_mask)
@@ -253,8 +270,34 @@ class MonoDETR(nn.Module):
                 align_corners=True).squeeze(1)
 
             # depth average + sigma
-            depth_ave = torch.cat([((1. / (depth_reg[:, :, 0: 1].sigmoid() + 1e-6) - 1.) + depth_geo.unsqueeze(-1) + depth_map) / 3,
-                                    depth_reg[:, :, 1: 2]], -1)
+            if self.use_geo_depth_fusion:
+                # [P2-DBDU] inverse-variance fusion of the three depth sources,
+                # engaged via a ZERO-INIT residual gate so iter-0 == baseline /3.
+                # precision_i = exp(-log_var_i); geometric log-var is ANALYTIC:
+                # sigma_geo = D_geo * sigma_h / h  =>  lv_geo = 2*(log D_geo + log sigma_h - log h).
+                d_reg = 1. / (depth_reg[:, :, 0: 1].sigmoid() + 1e-6) - 1.   # (B,Q,1)
+                d_geo = depth_geo.unsqueeze(-1)                              # (B,Q,1)
+                d_map = depth_map                                           # (B,Q,1)
+                lv_reg = depth_reg[:, :, 1: 2].clamp(-10, 10)               # learned, per-query
+                lv_geo = (2. * (torch.log(d_geo.clamp(min=0.1))
+                                + self.geo_log_sigma_h
+                                - torch.log(box2d_height.unsqueeze(-1)))).clamp(-10, 10)
+                lv_map = self.depthmap_log_var.clamp(-10, 10)              # learned scalar
+                p_reg, p_geo, p_map = torch.exp(-lv_reg), torch.exp(-lv_geo), torch.exp(-lv_map)
+                P = p_reg + p_geo + p_map
+                iv_depth = (p_reg * d_reg + p_geo * d_geo + p_map * d_map) / P   # inverse-variance estimate
+                # baseline /3 mean is the iter-0 anchor; blend toward IV via the gate.
+                base_depth = (d_reg + d_geo + d_map) / 3
+                alpha = self.geo_fusion_gate.clamp(0., 1.)                      # clamp-linear, ~0.05 init, free gradient
+                fused = (1. - alpha) * base_depth + alpha * iv_depth
+                # loss-sigma DECOUPLED from the gate: always the baseline learned
+                # log-var (depth_reg[...,1]), so opening the gate refines only the
+                # point estimate and never re-amplifies the depth loss (removes the
+                # init 3602x blowup). Loss path stays bit-identical to baseline.
+                depth_ave = torch.cat([fused, depth_reg[:, :, 1: 2]], -1)
+            else:
+                depth_ave = torch.cat([((1. / (depth_reg[:, :, 0: 1].sigmoid() + 1e-6) - 1.) + depth_geo.unsqueeze(-1) + depth_map) / 3,
+                                        depth_reg[:, :, 1: 2]], -1)
             outputs_depths.append(depth_ave)
 
             # angles
@@ -272,6 +315,7 @@ class MonoDETR(nn.Module):
         out['pred_depth'] = outputs_depth[-1]
         out['pred_angle'] = outputs_angle[-1]
         out['pred_depth_map_logits'] = pred_depth_map_logits
+        out['pred_depth_bins'] = pred_depth_bins  # [P2-DBDU] None in baseline mode
 
         if self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(
@@ -447,6 +491,7 @@ class SetCriterion(nn.Module):
 
     def loss_depth_map(self, outputs, targets, indices, num_boxes):
         depth_map_logits = outputs['pred_depth_map_logits']
+        bin_edges = outputs.get('pred_depth_bins')  # [P2-DBDU] None in baseline mode
 
         num_gt_per_img = [len(t['boxes']) for t in targets]
         gt_boxes2d = torch.cat([t['boxes'] for t in targets], dim=0) * torch.tensor([80, 24, 80, 24], device='cuda')
@@ -456,7 +501,7 @@ class SetCriterion(nn.Module):
         losses = dict()
 
         losses["loss_depth_map"] = self.ddn_loss(
-            depth_map_logits, gt_boxes2d, num_gt_per_img, gt_center_depth)
+            depth_map_logits, gt_boxes2d, num_gt_per_img, gt_center_depth, bin_edges)
         return losses
 
     def _get_src_permutation_idx(self, indices):
@@ -569,7 +614,11 @@ def build(cfg):
         two_stage=cfg['two_stage'],
         init_box=cfg['init_box'],
         use_dab = cfg['use_dab'],
-        two_stage_dino=cfg['two_stage_dino'])
+        two_stage_dino=cfg['two_stage_dino'],
+        # [P2-DBDU] cfg.get keeps old yaml / v0-baseline loadable
+        use_geo_depth_fusion=cfg.get('use_geo_depth_fusion', False),
+        geo_depth_init_pixel_sigma=cfg.get('geo_depth_init_pixel_sigma', 1.0),
+        geo_fusion_gate_init=cfg.get('geo_fusion_gate_init', 0.05))
 
     # matcher
     matcher = build_matcher(cfg)
