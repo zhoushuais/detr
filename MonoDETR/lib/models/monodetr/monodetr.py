@@ -19,6 +19,7 @@ from .depth_predictor import DepthPredictor
 from .depth_predictor.ddn_loss import DDNLoss
 from lib.losses.focal_loss import sigmoid_focal_loss
 from .dn_components import prepare_for_dn, dn_post_process, compute_dn_loss
+from .sca_fpn import SCAFPN
 
 
 def _get_clones(module, N):
@@ -29,7 +30,9 @@ class MonoDETR(nn.Module):
     """ This is the MonoDETR module that performs monocualr 3D object detection """
     def __init__(self, backbone, depthaware_transformer, depth_predictor, num_classes, num_queries, num_feature_levels,
                  aux_loss=True, with_box_refine=False, two_stage=False, init_box=False, use_dab=False, group_num=11, two_stage_dino=False,
-                 use_cop=False, cop_mode='depth_only'):
+                 use_cop=False, cop_mode='depth_only',
+                 use_sca_fpn=False, sca_fpn_reduction=16, sca_fpn_kernel=7,
+                 sca_fpn_high_guidance=True, use_dcn_lateral=False, dcn_kernel=3):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -113,6 +116,19 @@ class MonoDETR(nn.Module):
         self.with_box_refine = with_box_refine
         self.two_stage = two_stage
         self.num_classes = num_classes
+        self.use_sca_fpn = use_sca_fpn
+        if self.use_sca_fpn:
+            self.sca_fpn = SCAFPN(
+                num_channels=hidden_dim,
+                num_levels=num_feature_levels,
+                reduction=sca_fpn_reduction,
+                spatial_kernel=sca_fpn_kernel,
+                use_high_guidance=sca_fpn_high_guidance,
+                use_dcn_lateral=use_dcn_lateral,
+                dcn_kernel=dcn_kernel,
+            )
+        else:
+            self.sca_fpn = None
 
         if self.two_stage_dino:        
             _class_embed = nn.Linear(hidden_dim, num_classes)
@@ -186,6 +202,11 @@ class MonoDETR(nn.Module):
                 srcs.append(src)
                 masks.append(mask)
                 pos.append(pos_l)
+
+        # [P1-SCA-FPN] Enhance all projected feature levels before they are
+        # consumed by both the dense depth predictor and depth-aware transformer.
+        if self.sca_fpn is not None:
+            srcs = self.sca_fpn(srcs)
 
         if self.two_stage:
             query_embeds = None
@@ -611,7 +632,14 @@ def build(cfg):
         two_stage_dino=cfg['two_stage_dino'],
         # [P2-COP]
         use_cop=cfg.get('use_cop', False),
-        cop_mode=cfg.get('cop_mode', 'depth_only'))
+        cop_mode=cfg.get('cop_mode', 'depth_only'),
+        # [P1-SCA-FPN]
+        use_sca_fpn=cfg.get('use_sca_fpn', False),
+        sca_fpn_reduction=cfg.get('sca_fpn_reduction', 16),
+        sca_fpn_kernel=cfg.get('sca_fpn_kernel', 7),
+        sca_fpn_high_guidance=cfg.get('sca_fpn_high_guidance', True),
+        use_dcn_lateral=cfg.get('use_dcn_lateral', False),
+        dcn_kernel=cfg.get('dcn_kernel', 3))
 
     # matcher
     matcher = build_matcher(cfg)

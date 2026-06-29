@@ -12,6 +12,8 @@ dataset:
   use_dontcare: False
   bbox2d_type: 'anno'  # 'proj' or 'anno'
   meanshape: False  # use predefined anchor or not
+  # Best checkpoint selection uses the mean of
+  # Car/Pedestrian/Cyclist AP_R40 3D Moderate, so all three classes are required.
   writelist: ['Car', 'Pedestrian', 'Cyclist']
   clip_2d: False
 
@@ -39,6 +41,16 @@ model:
   dilation: False
   position_embedding: 'sine'  # 'sine' or 'learned'
   masks: False
+
+  # [P1-SCA-FPN] Spatial-Channel Attention FPN.
+  # Inserts feature enhancement after input_proj and before depth_predictor /
+  # depth-aware transformer. For P1+P2 combined training, keep this enabled.
+  use_sca_fpn: True
+  sca_fpn_reduction: 16
+  sca_fpn_kernel: 7
+  sca_fpn_high_guidance: True
+  use_dcn_lateral: True
+  dcn_kernel: 3
 
   # Depth predictor
   mode: LID
@@ -77,7 +89,7 @@ model:
   #   r0: use_cop=False  -> Baseline (independent MLP)
   #   r1: use_cop=True   -> + Chain-of-Prediction depth head
   # cop_mode: depth_only keeps original dim/angle heads; full also replaces dim/angle features.
-  use_cop: False
+  use_cop: True
   cop_mode: 'depth_only'
 
   # Loss coefficients

@@ -107,13 +107,32 @@ class KITTI_Dataset(data.Dataset):
         test_id = {'Car': 0, 'Pedestrian':1, 'Cyclist': 2}
 
         logger.info('==> Evaluating (official) ...')
-        car_moderate = 0
+        moderate_3d_r40 = {}
         for category in self.writelist:
+            if category not in test_id:
+                continue
             results_str, results_dict, mAP3d_R40 = get_official_eval_result(gt_annos, dt_annos, test_id[category])
-            if category == 'Car':
-                car_moderate = mAP3d_R40
+            if category in ['Car', 'Pedestrian', 'Cyclist']:
+                moderate_3d_r40[category] = float(mAP3d_R40)
             logger.info(results_str)
-        return car_moderate
+
+        best_metric_classes = ['Car', 'Pedestrian', 'Cyclist']
+        missing_classes = [cls for cls in best_metric_classes if cls not in moderate_3d_r40]
+        if missing_classes:
+            raise ValueError(
+                'Best checkpoint selection requires Car, Pedestrian and Cyclist '
+                f'3d_moderate_R40 metrics, but missing: {missing_classes}. '
+                'Please set dataset.writelist to include all three classes.')
+
+        best_selection_score = sum(moderate_3d_r40[cls] for cls in best_metric_classes) / len(best_metric_classes)
+        logger.info(
+            'Best selection metric '
+            '((Car_3d_moderate_R40 + Pedestrian_3d_moderate_R40 + Cyclist_3d_moderate_R40) / 3): '
+            f'{best_selection_score:.4f} '
+            f"(Car={moderate_3d_r40['Car']:.4f}, "
+            f"Pedestrian={moderate_3d_r40['Pedestrian']:.4f}, "
+            f"Cyclist={moderate_3d_r40['Cyclist']:.4f})")
+        return best_selection_score
 
     def __len__(self):
         return self.idx_list.__len__()

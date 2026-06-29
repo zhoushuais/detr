@@ -60,7 +60,7 @@ class Trainer(object):
                 map_location=self.device,
                 logger=self.logger)
             self.lr_scheduler.last_epoch = self.epoch - 1
-            self.logger.info("Loading Checkpoint... Best Result:{}, Best Epoch:{}".format(self.best_result, self.best_epoch))
+            self.logger.info("Loading Checkpoint... Best Selection Result:{}, Best Epoch:{}".format(self.best_result, self.best_epoch))
         
     def train(self):
         start_epoch = self.epoch
@@ -105,11 +105,11 @@ class Trainer(object):
                         save_checkpoint(
                             get_checkpoint_state(self.model, self.optimizer, self.epoch, best_result, best_epoch),
                             ckpt_name)
-                    self.logger.info("Best Result:{}, epoch:{}".format(best_result, best_epoch))
+                    self.logger.info("Best Selection Result:{}, epoch:{}".format(best_result, best_epoch))
 
             progress_bar.update()
 
-        self.logger.info("Best Result:{}, epoch:{}".format(best_result, best_epoch))
+        self.logger.info("Best Selection Result:{}, epoch:{}".format(best_result, best_epoch))
 
         return None
 

@@ -100,3 +100,102 @@ Depth-only CoP run1 与三次 baseline 均值对比：
 论文表述建议：P2 不写成“完整 CoP 替换属性头”，而写成“属性条件引导的深度预测头增强模块”。Full CoP replacement 可作为消融，说明直接替换全部属性预测头会破坏原模型稳定性；Depth-only CoP 是最终方案。
 
 下一步建议：停止继续修改 P2，优先做 P1 与 P2 的组合实验，即 `SCA-FPN + Depth-only CoP`。如果组合结果稳定，则论文主方法可定为“多尺度特征增强 + 属性条件深度预测增强”的双模块框架。
+
+## 2026-06-29 进展记录：建立 P1+P2 组合分支
+
+当前已从 `P2` 分支新建组合分支：
+
+```text
+p1-p2-combined
+```
+
+组合方式：只合并训练相关代码，不合并 P1 分支中的 PDF、调研文档等非代码文件。
+
+| 来源分支 | 合并内容 | 作用位置 | 当前状态 |
+|---|---|---|---|
+| `p1-sca-fpn` | `SCAFPN`、SCA-FPN 配置与 forward 接入逻辑 | `input_proj` 之后，`DepthPredictor` / `Depth-aware Transformer` 之前 | 已接入 |
+| `P2` | `CoPDepthHead`、`use_cop`、`cop_mode='depth_only'` | decoder query 输出后的 depth head | 已保留 |
+
+当前组合分支默认配置为：
+
+```yaml
+use_sca_fpn: True
+sca_fpn_high_guidance: True
+use_dcn_lateral: True
+use_cop: True
+cop_mode: 'depth_only'
+```
+
+静态检查结果：
+
+- `monodetr.py` 与 `sca_fpn.py` 通过 `python -m py_compile`。
+- `configs/monodetr.yaml` 通过 yaml 解析。
+- `git diff --check` 未发现 whitespace error。
+
+下一步实验建议：在服务器上直接使用 `p1-p2-combined` 分支的 `configs/monodetr.yaml` 跑第一次 `P1 + P2` 组合训练。建议至少重复三次。注意：此处原计划仍沿用 `Car AP_R40 3D Moderate` 选 best，但 2026-06-29 后续记录已将标准统一改为三类 Moderate R40 3D 均值，后续实验以新标准为准。
+
+
+| 这组数据，作为和MonoDETR论文中的Val AP数据进行对比，证明本地环境、数据集划分、训练配置和 MonoDETR 官方结果基本对齐 |                                                                                                                                |                                     |      |         |          |         |   |
+|:------------------------------------------------------------------------------------------------------------------:|:------------------------------------------------------------------------------------------------------------------------------:|:-----------------------------------:|:----:|:-------:|:--------:|:-------:|---|
+|                                                      实验名称                                                      |                                                            配置说明                                                            |                 类别                | 指标 |   Easy  | Moderate |   hard  |   |
+|                                                      baseline                                                      |                                                  按照car moderate选best epoch                                                  |     Car AP_R40@0.70, 0.70, 0.70:    |  3d  | 28.0994 |  19.9693 | 17.3196 |   |
+|                                                                                                                    |          日志路径：/desay120T/ct/dev/uid01955/MonoDETR-P2-useK/jieguo/monodetr_basline_run2/train.log.20260624_194135          | Pedestrian AP_R40@0.50, 0.50, 0.50: |  3d  |  7.1964 |  5.2696  |  4.2265 |   |
+|                                                                                                                    |                                                                                                                                |   Cyclist AP_R40@0.50, 0.50, 0.50:  |  3d  |  7.6784 |  3.8903  |  3.5413 |   |
+|                                                                                                                    |                                                                                                                                |                                     |      |         |          |         |   |
+|     这组数据，用的是和上面这个同一个训练结果，但是改成按三类均值选择best_epch，后续所有的改进对比都对比这组数据    |                                                                                                                                |                                     |      |         |          |         |   |
+|                                                      实验名称                                                      |                                                            配置说明                                                            |                 类别                | 指标 |   Easy  | Moderate |   hard  |   |
+|                                                      baseline                                                      |                                                     按照3类均值选best epoch                                                    |     Car AP_R40@0.70, 0.70, 0.70:    |  3d  | 27.9215 |  19.7731 | 16.5456 |   |
+|                                                                                                                    |          日志路径：/desay120T/ct/dev/uid01955/MonoDETR-P2-useK/jieguo/monodetr_basline_run2/train.log.20260624_194135          | Pedestrian AP_R40@0.50, 0.50, 0.50: |  3d  |  7.8701 |  5.7994  |  4.5808 |   |
+|                                                                                                                    |                                                                                                                                |   Cyclist AP_R40@0.50, 0.50, 0.50:  |  3d  |  8.3014 |  4.3058  |  3.8296 |   |
+|                                                                                                                    |                                                                                                                                |                                     |      |         |          |         |   |
+|                                             P2-CoP-depth_only——改进数据                                            |                                                                                                                                |                                     |      |         |          |         |   |
+|                                                      实验名称                                                      |                                                            配置说明                                                            |                 类别                | 指标 |   Easy  | Moderate |   hard  |   |
+| P2-CoP-depth_only                                                                                                  |                                                     按照3类均值选best epoch                                                    |     Car AP_R40@0.70, 0.70, 0.70:    |  3d  | 26.5177 |  18.9833 | 15.9105 |   |
+|                                                                                                                    |       日志路径：/desay120T/ct/dev/uid01955/MonoDETR-P2-useK/jieguo/monodetr_CoP_depth_only_run1/train.log.20260625_195352      | Pedestrian AP_R40@0.50, 0.50, 0.50: |  3d  | 10.6904 |  8.0000  |  6.6025 |   |
+|                                                                                                                    |                                                              run1                                                              |   Cyclist AP_R40@0.50, 0.50, 0.50:  |  3d  | 10.0810 |  5.1866  |  4.5886 |   |
+|                                                                                                                    |                                                                                                                                |                                     |      |         |          |         |   |
+|                                                      实验名称                                                      |                                                            配置说明                                                            |                 类别                | 指标 |   Easy  | Moderate |   hard  |   |
+| P2-CoP-depth_only                                                                                                  |                                                     按照3类均值选best epoch                                                    |     Car AP_R40@0.70, 0.70, 0.70:    |  3d  | 27.6673 |  20.4837 | 16.4533 |   |
+|                                                                                                                    |       日志路径：/desay120T/ct/dev/uid01955/MonoDETR-P2-useK/jieguo/monodetr_CoP_depth_only_run2/train.log.20260626_170953      | Pedestrian AP_R40@0.50, 0.50, 0.50: |  3d  |  8.8936 |  6.7671  |  5.0126 |   |
+|                                                                                                                    |                                                              run2                                                              |   Cyclist AP_R40@0.50, 0.50, 0.50:  |  3d  |  9.8842 |  5.3119  |  5.0960 |   |
+|                                                                                                                    |                                                                                                                                |                                     |      |         |          |         |   |
+|                                                      实验名称                                                      |                                                            配置说明                                                            |                 类别                | 指标 |   Easy  | Moderate |   hard  |   |
+| P2-CoP-depth_only                                                                                                  |                                                     按照3类均值选best epoch                                                    |     Car AP_R40@0.70, 0.70, 0.70:    |  3d  | 26.3028 |  19.0884 | 15.9506 |   |
+|                                                                                                                    |       日志路径：/desay120T/ct/dev/uid01955/MonoDETR-P2-useK/jieguo/monodetr_CoP_depth_only_run3/train.log.20260627_111011      | Pedestrian AP_R40@0.50, 0.50, 0.50: |  3d  |  8.9820 |  7.1128  |  5.2569 |   |
+|                                                                                                                    |                                                              run3                                                              |   Cyclist AP_R40@0.50, 0.50, 0.50:  |  3d  |  9.3989 |  4.6388  |  3.8912 |   |
+|                                                                                                                    |                                                                                                                                |                                     |      |         |          |         |   |
+|                                   P1-SCA-FPN-Highguidance=True-DCN=True——改进数据                                  |                                                                                                                                |                                     |      |         |          |         |   |
+|                                                      实验名称                                                      |                                                            配置说明                                                            |                 类别                | 指标 |   Easy  | Moderate |   hard  |   |
+| P1-SCA-FPN-Highguidance=True-DCN=True                                                                              |                                                     按照3类均值选best epoch                                                    |     Car AP_R40@0.70, 0.70, 0.70:    |  3d  | 25.8875 |  18.9672 | 15.8594 |   |
+|                                                                                                                    | 日志路径：/desay120T/ct/dev/uid01955/MonoDETR-main/jiegou/P1-SCA-FPN-Highguidance=True-DCN=True-Run2/train.log.20260528_095341 | Pedestrian AP_R40@0.50, 0.50, 0.50: |  3d  |  8.9627 |  7.0836  |  5.3242 |   |
+|                                                                                                                    |                                                  run2，注：第一次没训练完断了                                                  |   Cyclist AP_R40@0.50, 0.50, 0.50:  |  3d  | 10.0186 |  5.5273  |  4.3425 |   |
+|                                                                                                                    |                                                                                                                                |                                     |      |         |          |         |   |
+|                                                      实验名称                                                      |                                                            配置说明                                                            |                 类别                | 指标 |   Easy  | Moderate |   hard  |   |
+| P1-SCA-FPN-Highguidance=True-DCN=True                                                                              |                                                     按照3类均值选best epoch                                                    |     Car AP_R40@0.70, 0.70, 0.70:    |  3d  | 27.1302 |  19.3293 | 16.1102 |   |
+|                                                                                                                    | 日志路径：/desay120T/ct/dev/uid01955/MonoDETR-main/jiegou/P1-SCA-FPN-Highguidance=True-DCN=True-Run3/train.log.20260603_102115 | Pedestrian AP_R40@0.50, 0.50, 0.50: |  3d  | 10.9379 |  8.2033  |  6.6457 |   |
+|                                                                                                                    |                                                              run3                                                              |   Cyclist AP_R40@0.50, 0.50, 0.50:  |  3d  | 12.4880 |  6.5201  |  5.8428 |   |
+|                                                                                                                    |                                                                                                                                |                                     |      |         |          |         |   |
+|                                                      实验名称                                                      |                                                            配置说明                                                            |                 类别                | 指标 |   Easy  | Moderate |   hard  |   |
+| P1-SCA-FPN-Highguidance=True-DCN=True                                                                              |                                                     按照3类均值选best epoch                                                    |     Car AP_R40@0.70, 0.70, 0.70:    |  3d  | 27.3224 |  19.4730 | 16.1925 |   |
+|                                                                                                                    | 日志路径：/desay120T/ct/dev/uid01955/MonoDETR-main/jiegou/P1-SCA-FPN-Highguidance=True-DCN=True-Run4/train.log.20260604_104817 | Pedestrian AP_R40@0.50, 0.50, 0.50: |  3d  | 10.2740 |  7.5307  |  6.0640 |   |
+|                                                                                                                    |                                                              run4                                                              |   Cyclist AP_R40@0.50, 0.50, 0.50:  |  3d  |  8.8672 |  4.7641  |  4.0494 |   |
+
+## 2026-06-29 进展记录：修改 best checkpoint 选择标准
+
+根据新增实验记录，后续所有训练与对比统一使用三类 Moderate R40 3D 均值选择 `checkpoint_best.pth`：
+
+```text
+best_selection_score =
+(Car_3d_moderate_R40 + Pedestrian_3d_moderate_R40 + Cyclist_3d_moderate_R40) / 3
+```
+
+已完成代码修改：
+
+| 文件 | 修改内容 |
+|---|---|
+| `lib/datasets/kitti/kitti_dataset.py` | `eval()` 不再返回单独 `Car_3d_moderate_R40`，改为返回三类 `3d_moderate_R40` 均值 |
+| `lib/helpers/trainer_helper.py` | 日志文案从 `Best Result` 改为 `Best Selection Result`，避免误解 |
+| `configs/monodetr.yaml` | 注释说明 `writelist` 必须包含 `Car/Pedestrian/Cyclist`，因为 best 选择依赖三类均值 |
+| `P1_P2_combination_summary.md` / `P2_depth_only_cop_summary.md` | 同步更新后续实验口径 |
+
+注意：早期实验表中“按 Car Moderate 选 best”的结果仍保留为历史记录；从本条记录之后，论文主实验和后续改进实验都应以三类均值选 best 的结果为准。

@@ -268,7 +268,7 @@ cop_mode: 'depth_only'
 
 所有实验均使用 KITTI validation set，并采用 AP_R40 3D 指标。模型选择方式保持一致：
 
-> 使用 `checkpoint_best.pth`，即按 `Car AP_R40 3D Moderate` 选择 best checkpoint。
+> 后续统一使用 `checkpoint_best.pth`，并按 `(Car_3d_moderate_R40 + Pedestrian_3d_moderate_R40 + Cyclist_3d_moderate_R40) / 3` 选择 best checkpoint。早期阶段性分析中曾按 `Car AP_R40 3D Moderate` 选择 best，后续论文主实验应以三类均值口径为准。
 
 这是为了与 MonoDETR 和 KITTI 3D 检测常用汇报口径保持一致。
 
@@ -635,7 +635,7 @@ Decoder query feature h
 - `use_cop` 和 `cop_mode`。
 - best epoch。
 - Car / Pedestrian / Cyclist 的 AP_R40 3D Easy / Moderate / Hard。
-- 是否按 Car Moderate 选择 checkpoint。
+- 是否按三类 Moderate R40 3D 均值选择 checkpoint。
 - 与 baseline 或当前最好方法的差值。
 
 这样后面写论文时不会再重新翻日志。
