@@ -28,7 +28,8 @@ def _get_clones(module, N):
 class MonoDETR(nn.Module):
     """ This is the MonoDETR module that performs monocualr 3D object detection """
     def __init__(self, backbone, depthaware_transformer, depth_predictor, num_classes, num_queries, num_feature_levels,
-                 aux_loss=True, with_box_refine=False, two_stage=False, init_box=False, use_dab=False, group_num=11, two_stage_dino=False):
+                 aux_loss=True, with_box_refine=False, two_stage=False, init_box=False, use_dab=False, group_num=11, two_stage_dino=False,
+                 use_cop=False, cop_mode='depth_only'):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -59,7 +60,16 @@ class MonoDETR(nn.Module):
         self.bbox_embed = MLP(hidden_dim, hidden_dim, 6, 3)
         self.dim_embed_3d = MLP(hidden_dim, hidden_dim, 3, 2)
         self.angle_embed = MLP(hidden_dim, hidden_dim, 24, 2)
-        self.depth_embed = MLP(hidden_dim, hidden_dim, 2, 2)  # depth and deviation
+        # [P2-COP] Chain-of-Prediction depth head. The default depth_only mode
+        # keeps MonoDETR's original dim/angle heads and only replaces depth_reg.
+        self.use_cop = use_cop
+        self.cop_mode = cop_mode
+        if self.cop_mode not in ('depth_only', 'full'):
+            raise ValueError(f'Unsupported cop_mode: {self.cop_mode}')
+        if use_cop:
+            self.depth_embed = CoPDepthHead(hidden_dim)
+        else:
+            self.depth_embed = MLP(hidden_dim, hidden_dim, 2, 2)  # depth and deviation
         self.use_dab = use_dab
 
         if init_box == True:
@@ -232,17 +242,24 @@ class MonoDETR(nn.Module):
             outputs_class = self.class_embed[lvl](hs[lvl])
             outputs_classes.append(outputs_class)
 
-            # 3D sizes
-            size3d = inter_references_dim[lvl]
+            # [P2-COP] depth_only keeps original supervised dim/angle heads stable
+            # and uses the CoP chain only to predict per-query depth_reg.
+            dim_feat = angle_feat = None
+            if self.use_cop:
+                dim_feat, angle_feat, depth_reg = self.depth_embed[lvl](hs[lvl])
+            else:
+                depth_reg = self.depth_embed[lvl](hs[lvl])
+
+            if self.use_cop and self.cop_mode == 'full':
+                size3d = self.dim_embed_3d[lvl](dim_feat)
+            else:
+                size3d = inter_references_dim[lvl]
             outputs_3d_dims.append(size3d)
 
             # depth_geo
             box2d_height_norm = outputs_coord[:, :, 4] + outputs_coord[:, :, 5]
             box2d_height = torch.clamp(box2d_height_norm * img_sizes[:, 1: 2], min=1.0)
             depth_geo = size3d[:, :, 0] / box2d_height * calibs[:, 0, 0].unsqueeze(1)
-
-            # depth_reg
-            depth_reg = self.depth_embed[lvl](hs[lvl])
 
             # depth_map
             outputs_center3d = ((outputs_coord[..., :2] - 0.5) * 2).unsqueeze(2).detach()
@@ -252,13 +269,18 @@ class MonoDETR(nn.Module):
                 mode='bilinear',
                 align_corners=True).squeeze(1)
 
+            # [P2-COP] depth_embed uses chain-of-prediction internally if use_cop=True,
+            # but still outputs [B, NQ, 2] -> baseline fusion unchanged.
             # depth average + sigma
             depth_ave = torch.cat([((1. / (depth_reg[:, :, 0: 1].sigmoid() + 1e-6) - 1.) + depth_geo.unsqueeze(-1) + depth_map) / 3,
                                     depth_reg[:, :, 1: 2]], -1)
             outputs_depths.append(depth_ave)
 
             # angles
-            outputs_angle = self.angle_embed[lvl](hs[lvl])
+            if self.use_cop and self.cop_mode == 'full':
+                outputs_angle = self.angle_embed[lvl](angle_feat)
+            else:
+                outputs_angle = self.angle_embed[lvl](hs[lvl])
             outputs_angles.append(outputs_angle)
 
         outputs_coord = torch.stack(outputs_coords)
@@ -284,10 +306,7 @@ class MonoDETR(nn.Module):
 
     @torch.jit.unused
     def _set_aux_loss(self, outputs_class, outputs_coord, outputs_3d_dim, outputs_angle, outputs_depth):
-        # this is a workaround to make torchscript happy, as torchscript
-        # doesn't support dictionary with non-homogeneous values, such
-        # as a dict having both a Tensor and a list.
-        return [{'pred_logits': a, 'pred_boxes': b, 
+        return [{'pred_logits': a, 'pred_boxes': b,
                  'pred_3d_dim': c, 'pred_angle': d, 'pred_depth': e}
                 for a, b, c, d, e in zip(outputs_class[:-1], outputs_coord[:-1],
                                          outputs_3d_dim[:-1], outputs_angle[:-1], outputs_depth[:-1])]
@@ -547,6 +566,26 @@ class MLP(nn.Module):
         return x
 
 
+# [P2-COP] Chain-of-Prediction feature builder.
+# In depth_only mode, dim_feat and angle_feat are internal conditioning features
+# for depth prediction; MonoDETR's original dim/angle outputs stay unchanged.
+class CoPDepthHead(nn.Module):
+    def __init__(self, hidden_dim=256):
+        super().__init__()
+        self.mlp_dim = MLP(hidden_dim, hidden_dim, hidden_dim, 2)
+        self.mlp_angle = MLP(hidden_dim * 2, hidden_dim, hidden_dim, 2)
+        self.mlp_depth = MLP(hidden_dim * 3, hidden_dim, hidden_dim, 2)
+        self.depth_out = nn.Linear(hidden_dim, 2)
+
+    def forward(self, hs):
+        dim_feat = self.mlp_dim(hs)
+        angle_feat = self.mlp_angle(torch.cat([hs, dim_feat], -1))
+        depth_feat = self.mlp_depth(torch.cat([hs, dim_feat, angle_feat], -1))
+        depth_feat = depth_feat + dim_feat + angle_feat
+        depth_out = self.depth_out(depth_feat)
+        return dim_feat, angle_feat, depth_out
+
+
 def build(cfg):
     # backbone
     backbone = build_backbone(cfg)
@@ -569,7 +608,10 @@ def build(cfg):
         two_stage=cfg['two_stage'],
         init_box=cfg['init_box'],
         use_dab = cfg['use_dab'],
-        two_stage_dino=cfg['two_stage_dino'])
+        two_stage_dino=cfg['two_stage_dino'],
+        # [P2-COP]
+        use_cop=cfg.get('use_cop', False),
+        cop_mode=cfg.get('cop_mode', 'depth_only'))
 
     # matcher
     matcher = build_matcher(cfg)
@@ -612,3 +654,6 @@ def build(cfg):
     criterion.to(device)
     
     return model, criterion
+
+
+

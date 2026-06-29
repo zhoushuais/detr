@@ -3,7 +3,7 @@ random_seed: 444
 
 dataset:
   type: &dataset_type 'KITTI'
-  root_dir: 'data/KITTIDataset'
+  root_dir: '../data/KITTIDataset'
   train_split: 'train'
   test_split: 'val'
   batch_size: 16
@@ -12,7 +12,7 @@ dataset:
   use_dontcare: False
   bbox2d_type: 'anno'  # 'proj' or 'anno'
   meanshape: False  # use predefined anchor or not
-  writelist: ['Car']
+  writelist: ['Car', 'Pedestrian', 'Cyclist']
   clip_2d: False
 
   aug_pd: True
@@ -70,6 +70,16 @@ model:
   # Loss
   aux_loss: True
 
+  # [P2-COP] Chain-of-Prediction depth head (MonoCoP, CVPR 2026).
+  # Replaces the independent depth_embed MLP with a chained prediction:
+  #   hs -> dim_feat -> angle_feat -> depth_out
+  # Each step conditions on the previous prediction + original hs.
+  #   r0: use_cop=False  -> Baseline (independent MLP)
+  #   r1: use_cop=True   -> + Chain-of-Prediction depth head
+  # cop_mode: depth_only keeps original dim/angle heads; full also replaces dim/angle features.
+  use_cop: False
+  cop_mode: 'depth_only'
+
   # Loss coefficients
   cls_loss_coef: 2
   focal_alpha: 0.25
@@ -122,3 +132,5 @@ tester:
   checkpoint: 195  # the start ckpt epoch for 'all'
   threshold: 0.2  # confidence filter
   topk: 50
+
+
