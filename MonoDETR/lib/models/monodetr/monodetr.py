@@ -339,7 +339,9 @@ class SetCriterion(nn.Module):
         1) we compute hungarian assignment between ground truth boxes and the outputs of the model
         2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
     """
-    def __init__(self, num_classes, matcher, weight_dict, focal_alpha, losses, group_num=11):
+    def __init__(self, num_classes, matcher, weight_dict, focal_alpha, losses, group_num=11,
+                 use_scale_aware_depth_loss=False, scale_aware_depth_alpha=1.0,
+                 scale_aware_depth_tau=0.01, scale_aware_depth_max=2.0):
         """ Create the criterion.
         Parameters:
             num_classes: number of object categories, omitting the special no-object category
@@ -356,6 +358,12 @@ class SetCriterion(nn.Module):
         self.focal_alpha = focal_alpha
         self.ddn_loss = DDNLoss()  # for depth map
         self.group_num = group_num
+        # [P3-SADL] Scale-aware depth reweighting. This is a training-only
+        # small-object bias for query-level depth loss; inference is unchanged.
+        self.use_scale_aware_depth_loss = use_scale_aware_depth_loss
+        self.scale_aware_depth_alpha = scale_aware_depth_alpha
+        self.scale_aware_depth_tau = scale_aware_depth_tau
+        self.scale_aware_depth_max = scale_aware_depth_max
 
     def loss_labels(self, outputs, targets, indices, num_boxes, log=True):
         """Classification loss (Binary focal loss)
@@ -438,10 +446,22 @@ class SetCriterion(nn.Module):
         target_depths = torch.cat([t['depth'][i] for t, (_, i) in zip(targets, indices)], dim=0).squeeze()
 
         depth_input, depth_log_variance = src_depths[:, 0], src_depths[:, 1] 
-        depth_loss = 1.4142 * torch.exp(-depth_log_variance) * torch.abs(depth_input - target_depths) + depth_log_variance  
+        depth_loss = 1.4142 * torch.exp(-depth_log_variance) * torch.abs(depth_input - target_depths) + depth_log_variance
+        if self.use_scale_aware_depth_loss:
+            depth_loss = depth_loss * self._get_scale_aware_depth_weights(targets, indices, depth_loss.device)
         losses = {}
         losses['loss_depth'] = depth_loss.sum() / num_boxes 
         return losses  
+
+    def _get_scale_aware_depth_weights(self, targets, indices, device):
+        target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+        target_area = (target_boxes[:, 2] * target_boxes[:, 3]).clamp(min=1e-6)
+        weights = 1.0 + self.scale_aware_depth_alpha * torch.exp(
+            -target_area / self.scale_aware_depth_tau)
+        if self.scale_aware_depth_max > 0:
+            weights = torch.clamp(weights, max=self.scale_aware_depth_max)
+        weights = weights / weights.mean().clamp(min=1e-6)
+        return weights.detach().to(device)
     
     def loss_dims(self, outputs, targets, indices, num_boxes):  
 
@@ -676,7 +696,12 @@ def build(cfg):
         matcher=matcher,
         weight_dict=weight_dict,
         focal_alpha=cfg['focal_alpha'],
-        losses=losses)
+        losses=losses,
+        # [P3-SADL] Small-object / scale-aware depth loss.
+        use_scale_aware_depth_loss=cfg.get('use_scale_aware_depth_loss', False),
+        scale_aware_depth_alpha=cfg.get('scale_aware_depth_alpha', 1.0),
+        scale_aware_depth_tau=cfg.get('scale_aware_depth_tau', 0.01),
+        scale_aware_depth_max=cfg.get('scale_aware_depth_max', 2.0))
 
     device = torch.device(cfg['device'])
     criterion.to(device)

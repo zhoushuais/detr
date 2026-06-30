@@ -92,6 +92,15 @@ model:
   use_cop: True
   cop_mode: 'depth_only'
 
+  # [P3-SADL] Scale-aware depth loss for small / far objects.
+  # Reweights only the matched query-level depth loss by normalized 2D box area:
+  #   w = 1 + alpha * exp(-area / tau), then normalized by batch mean.
+  # This keeps inference unchanged and avoids changing the overall loss scale.
+  use_scale_aware_depth_loss: True
+  scale_aware_depth_alpha: 1.0
+  scale_aware_depth_tau: 0.01
+  scale_aware_depth_max: 2.0
+
   # Loss coefficients
   cls_loss_coef: 2
   focal_alpha: 0.25
