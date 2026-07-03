@@ -108,7 +108,7 @@ New and better results in this repo:
  
 5. Download [KITTI](http://www.cvlibs.net/datasets/kitti/eval_object.php?obj_benchmark=3d) datasets and prepare the directory structure as:
     ```
-    │MonoDETR/
+    │./
     ├──...
     ├──data/KITTIDataset/
     │   ├──ImageSets/

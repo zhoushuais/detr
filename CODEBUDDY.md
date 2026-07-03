@@ -19,7 +19,7 @@ python tools/train_val.py --config configs/monodetr.yaml 2>&1 | tee logs/train_o
 
 **可视化**: `python picture_tool/visualize.py --split val --vis_threshold 0.3`（需配置 data_root、result_dir、output_dir 参数）。
 
-**数据集路径**: KITTI 放在 `../data/KITTIDataset/`（相对于 MonoDETR/），包含 ImageSets/、training/、testing/ 子目录。可在 yaml 中修改 `dataset/root_dir`。
+**数据集路径**: KITTI 放在 `../data/KITTIDataset/`（相对于仓库根目录），包含 ImageSets/、training/、testing/ 子目录。可在 yaml 中修改 `dataset/root_dir`。
 
 ## 代码架构
 
