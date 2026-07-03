@@ -1,4 +1,4 @@
-# MonoDETR: Depth-guided Transformer for Monocular 3D Object Detection
+﻿# MonoDETR: Depth-guided Transformer for Monocular 3D Object Detection
 Official implementation of ['MonoDETR: Depth-guided Transformer for Monocular 3D Object Detection'](https://arxiv.org/pdf/2203.13310.pdf).
 
 The paper has been accepted by **ICCV 2023** 🎉.
@@ -108,7 +108,7 @@ New and better results in this repo:
  
 5. Download [KITTI](http://www.cvlibs.net/datasets/kitti/eval_object.php?obj_benchmark=3d) datasets and prepare the directory structure as:
     ```
-    │MonoDETR/
+    │./
     ├──...
     ├──data/KITTIDataset/
     │   ├──ImageSets/
