@@ -14,6 +14,7 @@ from lib.datasets.kitti.kitti_utils import get_affine_transform
 from lib.datasets.kitti.kitti_utils import affine_transform
 from lib.datasets.kitti.kitti_eval_python.eval import get_official_eval_result
 from lib.datasets.kitti.kitti_eval_python.eval import get_distance_eval_result
+from lib.datasets.kitti.evaluation_protocol import select_best_score
 import lib.datasets.kitti.kitti_eval_python.kitti_common as kitti
 import copy
 from .pd import PhotometricDistort
@@ -32,6 +33,8 @@ class KITTI_Dataset(data.Dataset):
         self.resolution = np.array([1280, 384])  # W * H
         self.use_3d_center = cfg.get('use_3d_center', True)
         self.writelist = cfg.get('writelist', ['Car'])
+        self.best_selection_metric = cfg.get(
+            'best_selection_metric', 'car_moderate_3d_r40')
         # anno: use src annotations as GT, proj: use projected 2d bboxes as GT
         self.bbox2d_type = cfg.get('bbox2d_type', 'anno')
         assert self.bbox2d_type in ['anno', 'proj']
@@ -116,22 +119,11 @@ class KITTI_Dataset(data.Dataset):
                 moderate_3d_r40[category] = float(mAP3d_R40)
             logger.info(results_str)
 
-        best_metric_classes = ['Car', 'Pedestrian', 'Cyclist']
-        missing_classes = [cls for cls in best_metric_classes if cls not in moderate_3d_r40]
-        if missing_classes:
-            raise ValueError(
-                'Best checkpoint selection requires Car, Pedestrian and Cyclist '
-                f'3d_moderate_R40 metrics, but missing: {missing_classes}. '
-                'Please set dataset.writelist to include all three classes.')
-
-        best_selection_score = sum(moderate_3d_r40[cls] for cls in best_metric_classes) / len(best_metric_classes)
+        best_selection_score = select_best_score(
+            moderate_3d_r40, self.best_selection_metric)
         logger.info(
-            'Best selection metric '
-            '((Car_3d_moderate_R40 + Pedestrian_3d_moderate_R40 + Cyclist_3d_moderate_R40) / 3): '
-            f'{best_selection_score:.4f} '
-            f"(Car={moderate_3d_r40['Car']:.4f}, "
-            f"Pedestrian={moderate_3d_r40['Pedestrian']:.4f}, "
-            f"Cyclist={moderate_3d_r40['Cyclist']:.4f})")
+            f'Best selection metric ({self.best_selection_metric}): '
+            f'{best_selection_score:.4f}')
         return best_selection_score
 
     def __len__(self):

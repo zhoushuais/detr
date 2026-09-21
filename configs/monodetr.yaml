@@ -12,9 +12,8 @@ dataset:
   use_dontcare: False
   bbox2d_type: 'anno'  # 'proj' or 'anno'
   meanshape: False  # use predefined anchor or not
-  # Best checkpoint selection uses the mean of
-  # Car/Pedestrian/Cyclist AP_R40 3D Moderate, so all three classes are required.
   writelist: ['Car', 'Pedestrian', 'Cyclist']
+  best_selection_metric: 'car_moderate_3d_r40'
   clip_2d: False
 
   aug_pd: True

@@ -2,6 +2,7 @@ import numpy as np
 import numba
 import io as sysio
 from .rotate_iou import rotate_iou_gpu_eval
+from ..evaluation_protocol import make_range_cleaner
 
 DISTANCE_COVER = False
 
@@ -489,15 +490,23 @@ def calculate_iou_partly(gt_annos, dt_annos, metric, num_parts=50):
     return overlaps, parted_overlaps, total_gt_num, total_dt_num
 
 
-def _prepare_data(gt_annos, dt_annos, current_class, difficulty, DIForDIS=True):
+def _prepare_data(gt_annos, dt_annos, current_class, difficulty, DIForDIS=True,
+                  data_cleaner=None):
     gt_datas_list = []
     dt_datas_list = []
     total_dc_num = []
     ignored_gts, ignored_dets, dontcares = [], [], []
     total_num_valid_gt = 0
     for i in range(len(gt_annos)):
-        rets = clean_data(gt_annos[i], dt_annos[i], current_class, difficulty) if DIForDIS \
-            else clean_data_by_distance(gt_annos[i], dt_annos[i], current_class, difficulty)
+        if data_cleaner is not None:
+            rets = data_cleaner(
+                gt_annos[i], dt_annos[i], current_class, difficulty)
+        elif DIForDIS:
+            rets = clean_data(
+                gt_annos[i], dt_annos[i], current_class, difficulty)
+        else:
+            rets = clean_data_by_distance(
+                gt_annos[i], dt_annos[i], current_class, difficulty)
         num_valid_gt, ignored_gt, ignored_det, dc_bboxes = rets
         ignored_gts.append(np.array(ignored_gt, dtype=np.int64))
         ignored_dets.append(np.array(ignored_det, dtype=np.int64))
@@ -529,7 +538,8 @@ def eval_class(gt_annos,
                min_overlaps,
                compute_aos=False,
                num_parts=50,
-               DIForDIS=True):
+               DIForDIS=True,
+               data_cleaner=None):
     """Kitti eval. support 2d/bev/3d/aos eval. support 0.5:0.05:0.95 coco AP.
     Args:
         gt_annos: dict, must from get_label_annos() in kitti_common.py
@@ -560,7 +570,13 @@ def eval_class(gt_annos,
     aos = np.zeros([num_class, num_difficulty, num_minoverlap, N_SAMPLE_PTS])
     for m, current_class in enumerate(current_classes):
         for l, difficulty in enumerate(difficultys):
-            rets = _prepare_data(gt_annos, dt_annos, current_class, difficulty, DIForDIS=DIForDIS)
+            rets = _prepare_data(
+                gt_annos,
+                dt_annos,
+                current_class,
+                difficulty,
+                DIForDIS=DIForDIS,
+                data_cleaner=data_cleaner)
             (gt_datas_list, dt_datas_list, ignored_gts, ignored_dets,
              dontcares, total_dc_num, total_num_valid_gt) = rets
             for k, min_overlap in enumerate(min_overlaps[:, metric, m]):
@@ -642,6 +658,50 @@ def get_mAP_R40(prec):
     for i in range(1, prec.shape[-1]):
         sums = sums + prec[..., i]
     return sums / 40 * 100
+
+
+def get_range_eval_result(gt_annos, dt_annos, current_class, range_type,
+                          lower, upper):
+    if current_class not in (0, 1, 2):
+        raise ValueError('current_class must be 0, 1, or 2')
+    if len(gt_annos) != len(dt_annos):
+        raise ValueError('GT and detection annotation counts must match')
+
+    data_cleaner = make_range_cleaner(range_type, lower, upper)
+    num_valid_gt = sum(
+        data_cleaner(gt_anno, dt_anno, current_class, 0)[0]
+        for gt_anno, dt_anno in zip(gt_annos, dt_annos)
+    )
+    min_overlap = 0.7 if current_class == 0 else 0.5
+    min_overlaps = np.full((1, 3, 1), min_overlap, dtype=np.float64)
+    result = {
+        'num_gt': num_valid_gt,
+        'iou_threshold': min_overlap,
+    }
+
+    if num_valid_gt == 0:
+        for metric_name in ('bev', '3d'):
+            result['%s_ap_r40' % metric_name] = float('nan')
+            result['%s_max_recall' % metric_name] = float('nan')
+        return result
+
+    for metric, metric_name in ((1, 'bev'), (2, '3d')):
+        evaluated = eval_class(
+            gt_annos,
+            dt_annos,
+            [current_class],
+            [0],
+            metric,
+            min_overlaps,
+            data_cleaner=data_cleaner)
+        precision = evaluated['precision'][0, 0, 0]
+        recall = evaluated['recall'][0, 0, 0]
+        result['%s_ap_r40' % metric_name] = (
+            float(get_mAP_R40(precision)) if num_valid_gt else float('nan'))
+        result['%s_max_recall' % metric_name] = (
+            float(np.max(recall) * 100.0) if num_valid_gt else float('nan'))
+
+    return result
 
 
 def print_str(value, *arg, sstream=None):
